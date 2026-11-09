@@ -36,7 +36,7 @@ function mockFetch(t, provider = () => answer(), exporter = () => new Response(n
       requests.push({ url, init });
       return provider(url, init);
     }
-    assert.equal(url, 'https://llmobs-intake.' + site + '/api/v2/llmobs/v1/trace/spans');
+    assert.equal(url, 'https://api.' + site + '/api/intake/llm-obs/v1/trace/spans');
     exports.push({ url, init, body: JSON.parse(init.body) });
     return exporter(url, init);
   });
@@ -46,7 +46,7 @@ function mockFetch(t, provider = () => answer(), exporter = () => new Response(n
 }
 
 function spanOf(record) {
-  return record.body.data.attributes.spans.find(span => span.meta['span.kind'] === 'llm');
+  return record.body.data.attributes.spans.find(span => span.meta.kind === 'llm');
 }
 
 test('disabled observability leaves the Gemini request and answer unchanged', async t => {
@@ -73,7 +73,7 @@ test('successful calls export agentless spans with metrics and no private conten
   assert.match(span.span_id, /^\d+$/);
   assert.equal(span.parent_id, 'undefined');
   assert.equal(span.name, 'recognize');
-  assert.equal(span.meta['span.kind'], 'llm');
+  assert.equal(span.meta.kind, 'llm');
   assert.equal(span.meta.model_name, 'test-model');
   assert.equal(span.meta.model_provider, 'google');
   assert.ok(span.start_ns > 0);
@@ -204,7 +204,7 @@ test('all application operations use the shared instrumentation', async t => {
   for (const record of exports) {
     const [root, child] = record.body.data.attributes.spans;
     assert.equal(record.body.data.attributes.spans.length, 2);
-    assert.equal(root.meta['span.kind'], 'workflow');
+    assert.equal(root.meta.kind, 'workflow');
     assert.equal(root.name, 'notechalant.' + child.name);
     assert.equal(root.parent_id, 'undefined');
     assert.equal(child.parent_id, root.span_id);

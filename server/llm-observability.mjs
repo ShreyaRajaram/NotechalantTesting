@@ -46,7 +46,7 @@ function startSpan(name, kind, config, parent) {
     duration: 0,
     status: 'ok',
     meta: {
-      'span.kind': kind,
+      kind,
       metadata: { content_captured: config.captureContent },
     },
     metrics: {},
@@ -75,7 +75,7 @@ async function exportSpans({ env, site }, spans) {
         attributes: { ml_app: env.DD_LLMOBS_ML_APP || 'notechalant', tags, spans },
       },
     };
-    const response = await fetch('https://llmobs-intake.' + site + '/api/v2/llmobs/v1/trace/spans', {
+    const response = await fetch('https://api.' + site + '/api/intake/llm-obs/v1/trace/spans', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'DD-API-KEY': env.DD_API_KEY },
       body: JSON.stringify(payload),
