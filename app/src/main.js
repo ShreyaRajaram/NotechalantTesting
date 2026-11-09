@@ -10,6 +10,7 @@
 //   Save copy               ->  buildCopy (document + ink)  ->  new file next to the original
 
 // Up front, so math never shows twice (see notes/katex.js).
+import './datadog.js';
 import 'katex/dist/katex.min.css';
 import { createInkCanvas } from './ink/inkCanvas.js';
 import { createTextLayer } from './ink/textLayer.js';
