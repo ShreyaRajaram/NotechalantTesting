@@ -14,6 +14,7 @@
 // { image (JPEG or PNG of the page with their ink on it), text, name, number, pageCount }.
 
 import { generate, hasConfig, MISSING_CONFIG } from './gemini.mjs';
+import { observeWorkflow } from './llm-observability.mjs';
 
 const MAX_TEXT_CHARS = 4000;
 const MAX_CONTEXT_CHARS = 1500;
@@ -97,15 +98,17 @@ export async function tutor(body, env) {
   const thread = cleanThread(body.thread);
   const page = cleanPage(body.page);
 
-  try {
-    if (thread.length === 0) {
-      return { status: 200, body: { review: await review(text, context, sketch, page, env) } };
+  return observeWorkflow(thread.length === 0 ? 'tutor.review' : 'tutor.reply', env, async () => {
+    try {
+      if (thread.length === 0) {
+        return { status: 200, body: { review: await review(text, context, sketch, page, env) } };
+      }
+      return { status: 200, body: { reply: await reply(text, context, thread, sketch, page, env) } };
+    } catch (err) {
+      console.error(err);
+      return { status: 502, body: { error: err.message } };
     }
-    return { status: 200, body: { reply: await reply(text, context, thread, sketch, page, env) } };
-  } catch (err) {
-    console.error(err);
-    return { status: 502, body: { error: err.message } };
-  }
+  });
 }
 
 async function review(text, context, sketch, page, env) {

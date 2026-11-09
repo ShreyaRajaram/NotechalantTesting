@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { generate } from '../gemini.mjs';
+import { observeWorkflow } from '../llm-observability.mjs';
 import { recognize, explain } from '../recognize.mjs';
 import { tutor } from '../tutor.mjs';
 import { POST as recognizePost } from '../../api/recognize.mjs';
@@ -27,7 +28,7 @@ function answer(text = '  A helpful answer  ') {
   });
 }
 
-function mockFetch(t, provider = () => answer(), exporter = () => new Response(null, { status: 202 })) {
+function mockFetch(t, provider = () => answer(), exporter = () => new Response(null, { status: 202 }), site = 'datadoghq.eu') {
   const exports = [];
   const requests = [];
   t.mock.method(globalThis, 'fetch', async (url, init) => {
@@ -35,7 +36,7 @@ function mockFetch(t, provider = () => answer(), exporter = () => new Response(n
       requests.push({ url, init });
       return provider(url, init);
     }
-    assert.equal(url, 'https://llmobs-intake.datadoghq.eu/api/v2/llmobs/v1/trace/spans');
+    assert.equal(url, 'https://llmobs-intake.' + site + '/api/v2/llmobs/v1/trace/spans');
     exports.push({ url, init, body: JSON.parse(init.body) });
     return exporter(url, init);
   });
@@ -45,7 +46,7 @@ function mockFetch(t, provider = () => answer(), exporter = () => new Response(n
 }
 
 function spanOf(record) {
-  return record.body.data.attributes.spans[0];
+  return record.body.data.attributes.spans.find(span => span.meta['span.kind'] === 'llm');
 }
 
 test('disabled observability leaves the Gemini request and answer unchanged', async t => {
@@ -200,6 +201,96 @@ test('all application operations use the shared instrumentation', async t => {
   assert.equal((await tutor({ text: 'hello' }, env)).status, 200);
   assert.equal((await tutor({ text: 'hello', thread: [{ role: 'student', text: 'why?' }] }, env)).status, 200);
   assert.deepEqual(exports.map(record => spanOf(record).name), ['recognize', 'explain', 'tutor.review', 'tutor.reply']);
+  for (const record of exports) {
+    const [root, child] = record.body.data.attributes.spans;
+    assert.equal(record.body.data.attributes.spans.length, 2);
+    assert.equal(root.meta['span.kind'], 'workflow');
+    assert.equal(root.name, 'notechalant.' + child.name);
+    assert.equal(root.parent_id, 'undefined');
+    assert.equal(child.parent_id, root.span_id);
+    assert.equal(child.trace_id, root.trace_id);
+    assert.notEqual(child.span_id, root.span_id);
+    assert.equal(root.status, 'ok');
+    assert.equal(root.meta.metadata.http_status, 200);
+    assert.ok(root.duration >= child.duration);
+  }
+});
+
+test('the requested US site and application name are the defaults', async t => {
+  const { exports } = mockFetch(t, () => answer(), undefined, 'datadoghq.com');
+  await recognize({ image: 'data:image/png;base64,image' }, {
+    ...env, DD_SITE: undefined, DD_LLMOBS_ML_APP: undefined,
+  });
+  assert.equal(exports.length, 1);
+  assert.equal(exports[0].body.data.attributes.ml_app, 'notechalant');
+  assert.equal(exports[0].body.data.attributes.spans.length, 2);
+});
+
+test('handled provider errors mark both the workflow and LLM span without exporting private details', async t => {
+  const { exports } = mockFetch(t, () => Response.json({ error: { message: 'private provider error' } }, { status: 429 }));
+  t.mock.method(console, 'error', () => {});
+  const result = await explain({ image: 'data:image/png;base64,private-image' }, env);
+  assert.equal(result.status, 502);
+  assert.equal(result.body.error, 'Gemini error, private provider error');
+  assert.equal(exports.length, 1);
+  const [root, child] = exports[0].body.data.attributes.spans;
+  assert.equal(root.status, 'error');
+  assert.equal(root.meta.metadata.http_status, 502);
+  assert.equal(root.meta['error.type'], 'WorkflowError');
+  assert.equal(child.status, 'error');
+  assert.equal(child.meta.metadata.http_status, 429);
+  assert.equal(JSON.stringify(exports[0].body).includes('private provider error'), false);
+  assert.equal(JSON.stringify(exports[0].body).includes('private-image'), false);
+});
+
+test('postprocessing errors mark the workflow and preserve the exception', async t => {
+  const { exports } = mockFetch(t);
+  const failure = new Error('private processing details');
+  await assert.rejects(observeWorkflow('processing', env, async () => {
+    await generate(parts, env);
+    // The LLM is complete, but the response is not ready for export yet.
+    assert.equal(exports.length, 0);
+    throw failure;
+  }), error => error === failure);
+  const [root, child] = exports[0].body.data.attributes.spans;
+  assert.equal(root.status, 'error');
+  assert.equal(child.status, 'ok');
+  assert.equal(JSON.stringify(exports[0].body).includes(failure.message), false);
+});
+
+test('an unavailable intake preserves the application response and exports the trace once', async t => {
+  const { exports } = mockFetch(t, () => answer('About: Algebra\nSolve for x.'), () => { throw new Error('intake offline'); });
+  const result = await explain({ image: 'data:image/png;base64,image' }, env);
+  assert.deepEqual(result, { status: 200, body: { about: 'Algebra', text: 'Solve for x.' } });
+  assert.equal(exports.length, 1);
+  assert.equal(exports[0].body.data.attributes.spans.length, 2);
+});
+
+test('disabled workflow instrumentation preserves the application response without exports', async t => {
+  const { exports, requests } = mockFetch(t, () => answer('recognized text'));
+  assert.deepEqual(await recognize({ image: 'data:image/png;base64,image' }, { ...env, DD_LLMOBS_ENABLED: 'false' }), {
+    status: 200, body: { text: 'recognized text' },
+  });
+  assert.equal(exports.length, 0);
+  assert.equal(requests.length, 1);
+});
+
+test('concurrent workflows keep parents and captured content in their own traces', async t => {
+  const { exports } = mockFetch(t);
+  const captureEnv = { ...env, DD_LLMOBS_CAPTURE_CONTENT: 'true' };
+  await Promise.all(['first request', 'second request'].map(text => observeWorkflow(text, captureEnv, async () => {
+    await generate([{ text }], captureEnv);
+    return { status: 200, body: { text } };
+  })));
+  assert.equal(exports.length, 2);
+  const roots = exports.map(record => record.body.data.attributes.spans[0]);
+  assert.notEqual(roots[0].trace_id, roots[1].trace_id);
+  for (const record of exports) {
+    const [root, child] = record.body.data.attributes.spans;
+    assert.equal(child.parent_id, root.span_id);
+    assert.equal(child.trace_id, root.trace_id);
+    assert.equal(root.name, 'notechalant.' + child.meta.input.messages[0].content);
+  }
 });
 
 test('invalid requests make no Gemini or telemetry calls', async t => {

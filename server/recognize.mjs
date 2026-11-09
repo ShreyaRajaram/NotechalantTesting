@@ -3,6 +3,7 @@
 // request body and returns { status, body } to send back. The Gemini call is in gemini.mjs.
 
 import { generate, hasConfig, MISSING_CONFIG } from './gemini.mjs';
+import { observeWorkflow } from './llm-observability.mjs';
 
 // The app adds whatever comes back to the file's notes, so it has to read as note text.
 const PROMPT = [
@@ -70,19 +71,21 @@ export async function recognize(body, env) {
     return { status: 400, body: { error: 'Expected JSON with an image field holding a PNG data URL' } };
   }
 
-  try {
-    const context = typeof body.context === 'string' ? body.context.slice(-MAX_CONTEXT_CHARS).trim() : '';
-    const previous = typeof body.previous === 'string' ? body.previous.slice(0, MAX_CONTEXT_CHARS).trim() : '';
-    const text = await generate(
-      [{ text: buildPrompt(context, previous) }, { inline_data: { mime_type: 'image/png', data: image.slice(PNG_PREFIX.length) } }],
-      env,
-      { operation: 'recognize', generationConfig: TRANSCRIBE_CONFIG, timeoutMs: TRANSCRIBE_TIMEOUT_MS },
-    );
-    return { status: 200, body: { text: text || '(nothing recognized)' } };
-  } catch (err) {
-    console.error(err);
-    return { status: 502, body: { error: err.message } };
-  }
+  return observeWorkflow('recognize', env, async () => {
+    try {
+      const context = typeof body.context === 'string' ? body.context.slice(-MAX_CONTEXT_CHARS).trim() : '';
+      const previous = typeof body.previous === 'string' ? body.previous.slice(0, MAX_CONTEXT_CHARS).trim() : '';
+      const text = await generate(
+        [{ text: buildPrompt(context, previous) }, { inline_data: { mime_type: 'image/png', data: image.slice(PNG_PREFIX.length) } }],
+        env,
+        { operation: 'recognize', generationConfig: TRANSCRIBE_CONFIG, timeoutMs: TRANSCRIBE_TIMEOUT_MS },
+      );
+      return { status: 200, body: { text: text || '(nothing recognized)' } };
+    } catch (err) {
+      console.error(err);
+      return { status: 502, body: { error: err.message } };
+    }
+  });
 }
 
 // Returns { about, text }: what was circled, in a few words, and the explanation.
@@ -94,17 +97,19 @@ export async function explain(body, env) {
   if (typeof image !== 'string' || !image.startsWith(PNG_PREFIX)) {
     return { status: 400, body: { error: 'Expected JSON with an image field holding a PNG data URL' } };
   }
-  try {
-    const answer = await generate(
-      [{ text: EXPLAIN_PROMPT }, { inline_data: { mime_type: 'image/png', data: image.slice(PNG_PREFIX.length) } }],
-      env,
-      { operation: 'explain', timeoutMs: EXPLAIN_TIMEOUT_MS },
-    );
-    return { status: 200, body: splitAbout(answer) };
-  } catch (err) {
-    console.error(err);
-    return { status: 502, body: { error: err.message } };
-  }
+  return observeWorkflow('explain', env, async () => {
+    try {
+      const answer = await generate(
+        [{ text: EXPLAIN_PROMPT }, { inline_data: { mime_type: 'image/png', data: image.slice(PNG_PREFIX.length) } }],
+        env,
+        { operation: 'explain', timeoutMs: EXPLAIN_TIMEOUT_MS },
+      );
+      return { status: 200, body: splitAbout(answer) };
+    } catch (err) {
+      console.error(err);
+      return { status: 502, body: { error: err.message } };
+    }
+  });
 }
 
 // Takes the "About: ..." first line off the answer, if the model wrote one.
