@@ -1,5 +1,6 @@
 // One Gemini generateContent call, shared by recognition (recognize.mjs) and the tutor (tutor.mjs).
 // Returns the answer's text.
+import { startLlmObservation } from './llm-observability.mjs';
 
 // Most answers take about a second, but now and then one stalls for 30s or more.
 // Giving up and asking again is much faster than waiting it out.
@@ -16,6 +17,19 @@ export const MISSING_CONFIG = 'Missing GEMINI_API_KEY or GEMINI_MODEL. Set them 
 // for example to ask for JSON that follows a schema.
 export async function generate(parts, env, options) {
   const opts = options || {};
+  const observation = startLlmObservation(parts, env, opts);
+  const result = { attempts: 0 };
+  try {
+    return await generateContent(parts, env, opts, result);
+  } catch (err) {
+    result.errorType ||= 'ResponseError';
+    throw err;
+  } finally {
+    if (observation) await observation.finish(result);
+  }
+}
+
+async function generateContent(parts, env, opts, result) {
   const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + env.GEMINI_MODEL + ':generateContent';
   const payload = { contents: [{ parts: parts }] };
   if (opts.generationConfig) {
@@ -33,13 +47,16 @@ export async function generate(parts, env, options) {
 
   let response;
   for (let attempt = 1; response === undefined; attempt++) {
+    result.attempts = attempt;
     try {
       response = await fetch(url, Object.assign({ signal: AbortSignal.timeout(timeoutMs) }, request));
     } catch (err) {
       if (err.name !== 'TimeoutError') {
+        result.errorType = 'NetworkError';
         throw new Error('Could not reach Gemini. Check the internet connection');
       }
       if (attempt === ATTEMPTS) {
+        result.errorType = 'TimeoutError';
         throw new Error('Gemini took too long to answer. Try again');
       }
       console.log('Gemini timed out, retrying');
@@ -49,7 +66,9 @@ export async function generate(parts, env, options) {
   const data = await response.json().catch(function () {
     return null;
   });
+  result.httpStatus = response.status;
   if (!response.ok) {
+    result.errorType = 'ProviderError';
     let detail = 'HTTP ' + response.status;
     if (data !== null && data.error && data.error.message) {
       detail = data.error.message;
@@ -66,5 +85,7 @@ export async function generate(parts, env, options) {
       text += answerParts[i].text;
     }
   }
-  return text.trim();
+  result.text = text.trim();
+  result.usage = data?.usageMetadata;
+  return result.text;
 }
