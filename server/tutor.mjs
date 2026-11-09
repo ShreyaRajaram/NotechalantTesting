@@ -112,6 +112,7 @@ async function review(text, context, sketch, page, env) {
   const writing = text ? 'NEW writing, as transcribed:\n"""\n' + text + '\n"""' : 'They drew something with no words in it. Look at the picture of it.';
   const parts = [{ text: REVIEW_PROMPT + contextSection(context) + '\n\n' + writing }, ...pictureParts(sketch, page)];
   const answer = await generate(parts, env, {
+    operation: 'tutor.review',
     timeoutMs: TIMEOUT_MS,
     generationConfig: { responseMimeType: 'application/json', responseSchema: REVIEW_SCHEMA },
   });
@@ -132,7 +133,7 @@ async function reply(text, context, thread, sketch, page, env) {
   const note = text ? '\n\nThe note:\n"""\n' + text + '\n"""' : '\n\nThe note is a drawing (pictured below).';
   const prompt = REPLY_PROMPT + contextSection(context) + note + '\n\nConversation so far:\n' + conversation;
   // The pictures go before the cue for the answer, so the tutor reads them first.
-  return generate([{ text: prompt }, ...pictureParts(sketch, page), { text: 'Tutor:' }], env, { timeoutMs: TIMEOUT_MS });
+  return generate([{ text: prompt }, ...pictureParts(sketch, page), { text: 'Tutor:' }], env, { operation: 'tutor.reply', timeoutMs: TIMEOUT_MS });
 }
 
 // The student's drawing and the page they're reading, as Gemini parts with a caption each.

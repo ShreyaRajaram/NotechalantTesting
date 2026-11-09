@@ -76,7 +76,7 @@ export async function recognize(body, env) {
     const text = await generate(
       [{ text: buildPrompt(context, previous) }, { inline_data: { mime_type: 'image/png', data: image.slice(PNG_PREFIX.length) } }],
       env,
-      { generationConfig: TRANSCRIBE_CONFIG, timeoutMs: TRANSCRIBE_TIMEOUT_MS },
+      { operation: 'recognize', generationConfig: TRANSCRIBE_CONFIG, timeoutMs: TRANSCRIBE_TIMEOUT_MS },
     );
     return { status: 200, body: { text: text || '(nothing recognized)' } };
   } catch (err) {
@@ -98,7 +98,7 @@ export async function explain(body, env) {
     const answer = await generate(
       [{ text: EXPLAIN_PROMPT }, { inline_data: { mime_type: 'image/png', data: image.slice(PNG_PREFIX.length) } }],
       env,
-      { timeoutMs: EXPLAIN_TIMEOUT_MS },
+      { operation: 'explain', timeoutMs: EXPLAIN_TIMEOUT_MS },
     );
     return { status: 200, body: splitAbout(answer) };
   } catch (err) {

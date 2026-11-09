@@ -174,6 +174,50 @@ If the pen drops out, the app reconnects on its own. On a Mac, Chrome needs Blue
 
 `vercel.json` builds the app from `app/` and serves `api/` as functions using the same Gemini code as `server/`. In the Vercel project, set `GEMINI_API_KEY` and `GEMINI_MODEL`, then open `/api/health` on the deployed site to check them. Bluetooth works from the deployed page.
 
+## LLM Observability
+
+The backend can send Gemini traces to **Datadog LLM Observability**, alongside the
+app's existing browser RUM. It uses Datadog's agentless HTTP intake with Node's
+built-in `fetch`, so no Datadog Agent or extra package is needed.
+
+1. Enable LLM Observability in your Datadog organization.
+2. In `server/.env`, set `DD_LLMOBS_ENABLED=true` and `DD_API_KEY` to a Datadog API
+   key from that organization. Set `DD_SITE` to your Datadog site (default:
+   `datadoghq.com`). The browser's RUM client token cannot be used as this API key.
+3. Set `DD_LLMOBS_ML_APP=notechalant`, `DD_SERVICE=notechalanttesting`, and
+   `DD_ENV` to the environment, such as `development` or `production`. Optionally
+   set `DD_VERSION` to your deployed version. Restart the server after changes.
+4. Write something, use Circle to ask, or ask the tutor. In Datadog, open
+   **LLM Observability**, select the `notechalant` application, and look for
+   `recognize`, `explain`, `tutor.review`, or `tutor.reply` spans.
+
+For Vercel, set the same server-side environment variables in the project settings
+and redeploy. Keep `DD_API_KEY` out of frontend variables (`VITE_*`) and source
+control. Observability is disabled unless `DD_LLMOBS_ENABLED=true`; it does not
+require changing the Gemini settings.
+
+Each Gemini call records the model, duration (including retries), attempt count,
+HTTP status when available, reported token usage, and a sanitized error category.
+Token usage reflects the final successful attempt; timed-out attempts may still
+incur provider charges that Gemini does not report. These traces cover the Gemini
+call, not later parsing of the tutor's answer. They are independent of RUM sessions.
+
+Prompt and answer text are omitted by default. To inspect them in Datadog, opt in
+with `DD_LLMOBS_CAPTURE_CONTENT=true`. This sends up to 16,000 characters of each,
+including any student notes or document text in the prompt. Images are always
+replaced by `[image omitted]`; their base64 data and API keys are never included
+in span content. Provider error messages are also omitted from telemetry.
+
+Exports are awaited on both deployment paths so Vercel can finish sending before
+returning. Each export has a one-second timeout, which can add up to one second to
+the response. Failed exports log a warning and preserve the Gemini result. If no
+spans appear, check the backend logs for export warnings and verify the API key,
+site, and LLM Observability access. Supported sites are `datadoghq.com`,
+`us3.datadoghq.com`, `us5.datadoghq.com`, `datadoghq.eu`, `ap1.datadoghq.com`,
+`ap2.datadoghq.com`, and `ddog-gov.com`.
+
+Run the backend integration tests with `npm test --prefix server`.
+
 ## Other inputs, for development
 
 The debug panel (**D**) has buttons for inputs used while building it:
